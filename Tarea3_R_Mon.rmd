@@ -1,0 +1,439 @@
+---
+title: "Base Pricing Analysis y Estimaci??n de Elasticidades"
+author: "Montserrat Aldave C.U. 143592"
+date: "13 de Octubre de 2019"
+output: pdf_document
+urlcolor: blue
+graphics: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE, eval = FALSE,
+                      fig.width = 4.5, fig.height = 3, fig.align = "right")
+
+stargazer_type = "latex"      # "text" for running in Notebook mode, "latex" when creating a pdf document.
+
+```
+
+
+
+## Objetivo
+
+Procter and Gamble te elige como consultor de precios de  para maximizar su utilidad. Actualmente, Procter tiene en su l??nea de detergentes l??quidos a Tide y a Gain. El objetivo es: 1) Determinar si ambos productos est??n compitiendo entre s??, 2) La intensidad de la competencia y 3) Hacer una selecci??n de precios CONJUNTA de Tide y Gain para maximizar beneficios. 
+
+La base de datos contiene datos de compras en supermercados a nivel escaneo para distintas marcas de detergentes. Para hacer esto, estimaremos las elasticidades precio directas y cruzadas de dos detergentes importantes  *Tide* and *Gain*. y sus competidores  *Arm & Hammer* y *Purex*.
+
+El modelo a estimar es: $log(1+Q_i) = \alpha + \beta_{Tide}log(1+P_{Tide}) + \epsilon_i$
+
+\bigskip
+
+## Librer??as
+
+Instalen las librer??as que no tengan todav??a: lfe, knitr, and stargazer. Chequen para que sirven.
+
+```{r message=FALSE, warning=FALSE}
+rm(list=ls())
+
+library(tidyverse)
+library(bit64)
+library(data.table)
+library(lfe)
+library(knitr)
+library(stargazer)
+library(lubridate)
+```
+
+
+
+\newpage
+
+## Datos
+Los datos vienen de un base a nivel escaner de Nielsen. La base contiene datos semanales de precios y cantidades vendidas de todos los productos (UPC's) para las grandes cadenas de supermercados en EEUU. 
+
+#### Brand data
+
+La base `brands` in `Brands.RData` contiene informacion de las 5 marcas principales para 3 categorias de productos:
+
+```{}
+1036   FRUIT JUICE - LEMON/LIME
+1040   FRUIT JUICE - ORANGE - OTHER CONTAINER
+7012   DETERGENTS - HEAVY DUTY - LIQUID
+
+```
+
+Los datos incluyen el codigo, la descripcion y el ingreso total. Las marcas principales con base en el ingreso total.  
+
+Nos concentraremos en la categoria de detergentes liquidos con el `product_module_code` 7012. 
+
+#### Store data
+
+Inspecciona la base. `store_code_uc` identifica el codigo de las tiendas. Para algunas de las tiendas, conocemos a que cadena de tiendas pertenece con el `retailer_code`. La base incluye el Scantrack (SMM) codigo de mercado y su descripcion. Vemos que la base incluye a varias ciudades grandes como *Chicago* or *Raleigh-Durham*. La base tambien incluye el Codigo Postal de la tienda.
+
+#### Movement data
+
+La base de datos `brand_move_7012.Rdata` incluye los precios y las cantidades vendidas a un nivel marca/tienda/semana. Los precios por marca son calculados como el promedio ponderado para todas las semanas-tiendas. Para la base de detergentes l??quidos, el precio est?? en d??lares por onza. Las cantidades vendidas son las onzas totales vendidas. Finalmente la base incluye una variable `promo_dummy`, que indica si el producto ten??a una promoci??n en esa semana-tienda. 
+
+La columna `week_end` indica el ??ltimo d??a para esa semana, definida como d??as de Domingo a S??bado. Finalmente, se incluye un periodo de 2010-2013.
+
+\newpage
+
+## Data Cleaning
+
+Cargando la base
+
+```{r}
+#En mi MaC: 
+load("~/Desktop/Mis Documentos/Maestria Eco Aplicada/Econometria Aplicada /Tarea Taller /Tarea 1 R//Data/Brands.RData")
+load("~/Desktop/Mis Documentos/Maestria Eco Aplicada/Econometria Aplicada /Tarea Taller /Tarea 1 R/Data/Stores.RData")
+
+#En la oficina: 
+#load("C:/Users/caldave/OneDrive/MAE/Econometr??a/Taller - Isidoro/Tarea 1 R/Data/Brands.RData")
+#load("C:/Users/caldave/OneDrive/MAE/Econometr??a/Taller - Isidoro/Tarea 1 R/Data/Stores.RData")
+
+brands
+glimpse(brands)
+```
+
+
+#### Select the category and brands
+*Selecciona la categoria de detergente de la tabla de brands y despues ordena las marcas de mayor a menor ingreso `revenue`. Selecciona las 4 marcas mas importantes.*
+
+```{r}
+selected_module = 7012                 # Laundry detergent
+
+deterg <- brands %>%
+  filter(product_module_code==7012) %>%
+  arrange(desc(revenue))
+
+deterg
+```
+
+
+\medskip
+
+
+*Crea una nueva variable que se llame `brand_name` con nombres de marcas mas sencullo como  `Tide`, `Gain`, `ArmHammer`, `Purex`, `All`. Usaremos estos nombre para las estimaciones para hacer el output mas legible.*
+
+```{r}
+brand_name <- c("Tide", "Gain", "ArmHammer", "Purex", "All")
+
+deterg <- deterg %>%
+   add_column(brand_name) %>%
+   select(brand_code_uc, brand_name, product_module_code,revenue)
+
+deterg   
+
+```
+
+Nota que R no acepta nombres de variables con caracteres especiales como `&`.
+
+#### Preparando la base movement 
+
+*Carga la base `brand_move_7012.RData`. Cambia los nombres de la variable `units` a `cantidad` y `promo_dummy` a `promocion`. Cambia el tipo de la variable `promocion` de factor a numeric con `as.numeric`. Finalmente, haz un merge para tener el revenue y la variable `brand_name` en la base movement.*
+
+(TIP: UTILIZA el comando LEFT_JOIN. La llave en comun es brand_code_uc)
+
+Quedate solo con las observaciones de las marcas que vamos a analizar 
+
+```{r}
+#En mi Mac:
+load("~/Desktop/Mis Documentos/Maestria Eco Aplicada/Econometria Aplicada /Tarea Taller /Tarea 1 R/Data/brand_move_7012.RData")
+
+#En la ofi: 
+#load("C:/Users/caldave/OneDrive/MAE/Econometr??a/Taller - Isidoro/Tarea 1 R/Data/brand_move_7012.RData")
+
+move <- move %>%
+  rename(cantidad = units) %>%
+  rename(promocion = promo_dummy) %>%
+  mutate(promocion = as.numeric(promocion))
+
+
+deterge <-
+left_join(deterg, move,
+          by = "brand_code_uc",
+          na.omit)
+
+deterge
+
+```
+
+#### Outliers
+
+Para remover outliers, primero creamos una funcion que los identifique. 
+```{r}
+is_outlier <- function(x, threshold_bottom, threshold_top) {
+   is_outlier = rep(FALSE, times = length(x))
+   median_x   = median(x, na.rm = TRUE)
+   is_outlier[x/median_x < threshold_bottom | x/median_x > threshold_top] = TRUE
+   return(is_outlier)
+}
+```
+
+
+*Utliza la funcion creada arriba para encontrar outlier en los precios con corte 0.35 y 2.5, por tienda y marca. Haz y reporta un tabulado del porcentaje de outliers y despues quita las observaciones.*
+
+```{r}
+#deterg es la base de datos que quiero trbajar
+deterge <- deterge %>%
+    mutate(outlier = is_outlier(deterge$price, 0.35,2.5)) 
+  
+outlier_tot <- sum(deterge$outlier, na.rm=FALSE)
+
+outliers <- deterge %>%
+  group_by(store_code_uc, brand_name) %>% 
+  summarise(proportion=100*(sum(outlier=="TRUE")/outlier_tot)) 
+  #si quiero solo los outliers: %>% filter(proportion !=0)
+
+kable(outliers, 
+      caption = "Outliers")
+
+#Quitar los outliers de la base de datos 
+
+
+
+```
+
+#### Reshape de long a wide 
+
+La base esta en formato long para marcas (filas por marca). Para hacer el analisis necesitamos que la base este en formato wide para las marcas. Columnas por marcas. Para esto hay varias opciones en R. Les recomiendo usar `dcast` de `data.table` o pivot_wider de `tidyverse`. 
+
+Elaboremos sobre como necesitamos que este la estructurada la base de datos. Necesitamos una base panel a nivel tienda (`store_code_uc`) y semana (`week_end`), con la informaci??n de los precios y las cantidades por marca en las columnas. 
+
+`store_code_uc + week_end ~ brand_name`,
+
+Las columnas que queremos a nivel marca son el precio, la cantidad y la dummy de las promociones.
+
+`value.var = c("quantity", "price", "promotion")`.
+
+```{r}
+precios_tienda <- move %>%
+   group_by(store_code_uc) %>%
+   is_outlier()
+
+
+
+```
+
+#### Merge de la base store con la base move
+
+*Ahora, haz un merge de la base de move contra de la base de store. En particular, contra retailer_code, SMM_code, SMM_description. Despues quita los valores donde retailer_code is NA. *
+
+
+
+#### Crear tendencias de tiempo
+
+*Extrae el a??o y mes de la variable (`week_end`) (Tip: instala `lubridate` y utiliza las funciones year y month). Despues, crea una variable que sea la tendencia en el tiempo, donde 1 es el primer a??o y mes y 13 es el ??ltimo.*
+
+```{r }
+glimpse(move)
+# Extrayendo el anio mes 
+move<-
+   move %>% 
+   mutate(mes = month(week_end),
+          anio = year(week_end))
+
+table(move$anio)
+table(move$mes)
+
+#Creando el indice de tiempo
+move<-
+   move %>%
+   arrange(anio, mes) %>% 
+   group_by(anio, mes) %>% 
+   mutate(indice_tiempo = group_indices())
+
+
+```
+
+
+#### Base cuadrada: quitar los NAs
+
+Finalmente, qu??date con las observaciones que no tienen ningun NA.
+
+```{r }
+move<-move %>% ungroup()
+move<-
+   move %>% 
+   filter(complete.cases(.))
+
+```
+
+
+
+\newpage
+
+## An??lisis Exploratorio
+
+#### Observaciones y Cobertura Geogr??fica
+
+*Cuantas observaciones hay? Cu??ntas tiendas?*
+
+*Para ver la validez externa del estudio, veamos la cobertura geogr??fica. Crea una tabla que reporte cuantas observaciones hay por cada SMM.*
+
+```{r}
+market_coverage <-
+   move %>% 
+   group_by(SMM_description) %>% 
+   summarise(n = n())
+```
+
+
+\medskip
+
+
+*Reporta la tabla*
+
+```{r}
+kable(market_coverage, col.names = c("Scantrack market", "No. obs."))
+```
+
+
+#### Variaci??n en los Precios
+
+Para estimar bien la regresi??n de la elasticidad $log(1+Q_{it}) = \alpha + \beta log(1+P_{it})+\epsilon_{it}$, necesitamos que el precio vari?? lo suficiente para tener un buen estimador. 
+
+Recuerda que: 
+
+$$\hat{\beta} = \frac{\Sigma_{j = 1}^{j = NT}(log(1+P_{it})- \hat{log(1+P_{it})})*log(1+Q_{it})}{\Sigma_{j = 1}^{j = NT}(log(1+P_{it})- \hat{log(1+P_{it})})^2} $$
+
+Vamos a predecir la demanda de Tide y Gain (nuestros clientes!). Para cada una de estas marcas, queremos tener una visualizaci??n de la variaci??n del precio a trav??s de las observaciones. Tambi??n queremos ver la variaci??n de precios respecto a la competencia. 
+
+- *Para ver la variaci??n del precio, normaliza el precio respecto a su propia media y luego muestra un histograma (o densidad) de los precios*
+
+Tide 
+
+
+Gain 
+
+
+- *Para visualizar los precios relativos. Grafica el precio de tide/competencia y el precio de gain/competencia.*
+
+Gain
+
+#### Resumen de An??lisis Exploratorio
+
+*Discute los resultados de la variaci??n de precios y precios relativos.*
+
+
+
+\newpage
+
+## Estimaci??n
+
+Estimaremos el modelo con distintos regresores para comprobar que el resultado es robusto. En cada modelo, la variable dependiente es `log(1+quantity_<brand name>)`. Donde las marcas de la misma empresa (sobre las que estimaremos) son Tide y Gain.
+
+*Tip: Utliza la libreria `lfe`, paquete `felm`*
+
+\bigskip
+
+Para reportar los coeficientes de las regresiones, recomiendo utilizar el paquete `stargazer`. 
+
+Abajo un ejemplo de como utilizar stargazer. (Los `fit` son las regresiones):
+
+```{r eval=FALSE, results="asis"}
+stargazer(fit_base, fit_store_FE, fit_trend, fit_month_FE, 
+          type  = "text",
+          column.labels  = c("Base", "Store FE", "Trend", "Store + year/month FE"),
+          dep.var.labels.include = FALSE)
+```
+
+
+\bigskip
+
+#### Empieza por estimar para Tide el modelo b??sico de log(1+Q)~log(1+P) con errores cl??ster a nivel tienda y efectos fijos de tienda y anio-mes 
+
+#### Agrega los precios de la competencia + lo anterior
+
+#### Promociones
+
+*Agrega las dummies de promoci??n propia y de la competencia. Primero s??lo la dummy de promoci??n propia y luego la de todas. Que tanto cambi?? la estimaci??n con cada nueva variable?*
+
+Hay evidencia de canibalizaci??n de demandas entre Tide y Gain? Es decir, est??n compitiendo entre ellas?
+
+
+\bigskip
+
+*Resume los resultados en una sola tabla. que tanto cambiaron las estimaciones? Cual parece ser el ajuste adecuado?*
+
+\bigskip
+
+
+
+#### Gain
+
+*Ahora repite el ejercicio para Gain. Comenta como lo hiciste para Tide. 
+
+
+\newpage
+
+## Profitability analysis
+
+El objetivo ahora es escoger $(P_{Gain}, P_{Tide})$ de manera conjunta para maximizar utilidad. Utiliza el estimador que escogiste y eval??a como cambia la utilidad cuando cambian los precios de Tide y de Gain. 
+
+\bigskip
+
+Para predicir la cantidad demandada, deben tomar en cuenta los efectos fijos. Para hacer eso, utilicen la funci??n que esta en el c??digo de abajo. 
+
+```{r}
+source("./predict.felm.R")
+```
+
+\bigskip
+
+Qu??date ??nicamente con las observaciones para hacer el predict.
+
+```{r}
+move_predict<-
+   move %>%
+   filter(anio == 2013)
+```
+
+\bigskip
+
+Algunos datos de los m??rgenes de utilidad. 
+```{r}
+gross_margin  = 0.35
+retail_margin = 0.18
+
+cost_Tide = (1-gross_margin)*(1-retail_margin)*mean(move_predict$price_TIDE)
+cost_Gain = (1-gross_margin)*(1-retail_margin)*mean(move_predict$price_GAIN)
+```
+
+\bigskip
+
+Creamos un vector de cambios en los precios de -5% a 5%. 
+
+```{r}
+percentage_delta = seq(-0.05, 0.05, 0.025)    
+```
+
+\bigskip
+
+Para hacer la optimizaci??n conjunta, consideremos todas las combinaciones de cambios de precios de Tide y Gain. 
+
+```{r}
+L = length(percentage_delta)
+profit_DT = tibble(delta_Tide = rep(percentage_delta, each = L),
+                   delta_Gain = rep(percentage_delta, times = L),
+                   profit     = rep(0, times = L*L))
+```
+
+Abre la base profit_DT. Cerci??rate de que todas las combinaciones de cambios en los precios est??n en la tabla. 
+
+\bigskip
+
+Ahora iteremos para poner el precio que sale de Tide y Gain en cada combinaci??n de cambios. 
+
+
+\medskip
+
+Dentro de la tabla profit_DT, crea la columna profit_relativo. Donde profit_relativo = profit/profit_0. El profit_0 es donde no hubo cambios de los precios de Tide ni de Gain. 
+
+
+\bigskip
+
+*Reporta la tabla de utlidades. Discute que combinaci??n de precios lleva al m??ximo de utilidad.*
+
+
+
+
